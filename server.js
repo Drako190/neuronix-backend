@@ -14,6 +14,8 @@ const goalRoutes    = require('./routes/goals');
 const noteRoutes    = require('./routes/notes');
 const pomodoroRoutes = require('./routes/pomodoro');
 const userRoutes    = require('./routes/users');
+const configRoutes = require('./routes/config');
+const chatRoutes   = require('./routes/chat');
 
 // ── Conectar Supabase ──────────────────────────
 connectDB();
@@ -55,6 +57,12 @@ app.use('/api/', generalLimit);
 app.use('/api/auth/login', authLimit);
 app.use('/api/auth/register', authLimit);
 app.use('/api/auth/forgot-password', authLimit);
+const chatLimit = rateLimit({
+  windowMs: 60 * 1000, max: 20,
+  message: { error: 'Demasiados mensajes, espera un momento' },
+  validate: { xForwardedForHeader: false },
+});
+app.use('/api/chat', chatLimit);
 
 // ── Rutas API ──────────────────────────────────
 app.use('/api/auth',      authRoutes);
@@ -63,6 +71,8 @@ app.use('/api/goals',     goalRoutes);
 app.use('/api/notes',     noteRoutes);
 app.use('/api/pomodoro',  pomodoroRoutes);
 app.use('/api/users',     userRoutes);
+app.use('/api/config', configRoutes);
+app.use('/api/chat',   chatRoutes);
 
 // ── Health check ───────────────────────────────
 app.get('/api/health', (req, res) => {
