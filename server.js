@@ -1,87 +1,76 @@
-// routes/chat.js — Neuronix Chatbot (Groq - llama-3.3-70b)
-const express = require('express');
-const router  = express.Router();
-const { proteger } = require('../middleware/auth');
+﻿require('dotenv').config();
+const express  = require('express');
+const cors     = require('cors');
+const helmet   = require('helmet');
+const morgan   = require('morgan');
+const rateLimit = require('express-rate-limit');
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const { connectDB } = require('./config/db');
 
-const SYSTEM_PROMPT = `Eres NeuroBot, el asistente de estudio inteligente de Neuronix.
-Tu misión es ayudar a estudiantes a mejorar sus hábitos de estudio, productividad y bienestar académico.
+const authRoutes    = require('./routes/auth');
+const habitRoutes   = require('./routes/habits');
+const goalRoutes    = require('./routes/goals');
+const noteRoutes    = require('./routes/notes');
+const pomodoroRoutes = require('./routes/pomodoro');
+const userRoutes    = require('./routes/users');
+const chatRoutes   = require('./routes/chat');
 
-Puedes ayudar con:
-- Técnicas de estudio (Pomodoro, Feynman, mapas mentales, etc.)
-- Consejos para construir y mantener hábitos de estudio
-- Motivación y manejo del estrés académico
-- Gestión del tiempo y organización
-- Estrategias para recordar y retener información
-- Consejos de bienestar (sueño, ejercicio, alimentación para estudiar mejor)
+connectDB();
 
-Reglas:
-- Responde siempre en español
-- Sé amigable, motivador y concreto
-- Da consejos prácticos y accionables, no solo teoría
-- Respuestas cortas y claras (máximo 3-4 párrafos)
-- Si el usuario comparte su contexto (hábitos, metas, rachas), úsalo para personalizar tu respuesta
-- No respondas temas fuera del ámbito educativo/hábitos/productividad`;
+const app = express();
+app.set('trust proxy', 1);
 
-// POST /api/chat
-router.post('/', proteger, async (req, res) => {
-  try {
-    const { message, history = [] } = req.body;
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-    if (!message || message.trim().length === 0) {
-      return res.status(400).json({ error: 'El mensaje no puede estar vacío' });
-    }
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','PATCH','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
 
-    if (message.length > 500) {
-      return res.status(400).json({ error: 'Mensaje demasiado largo (máx. 500 caracteres)' });
-    }
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
 
-    // Construir historial en formato OpenAI (compatible con Groq)
-    const recentHistory = history.slice(-10);
-    const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...recentHistory.map(m => ({
-        role: m.role === 'bot' ? 'assistant' : 'user',
-        content: m.text,
-      })),
-      { role: 'user', content: message.trim() },
-    ];
+const generalLimit = rateLimit({ windowMs: 15*60*1000, max: 200, message: { error: 'Demasiadas peticiones' }, validate: { xForwardedForHeader: false } });
+const authLimit    = rateLimit({ windowMs: 15*60*1000, max: 10,  message: { error: 'Demasiados intentos' },   validate: { xForwardedForHeader: false } });
+const chatLimit    = rateLimit({ windowMs: 60*1000,    max: 20,  message: { error: 'Demasiados mensajes'  },  validate: { xForwardedForHeader: false } });
 
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        temperature: 0.7,
-        max_tokens: 512,
-        top_p: 0.9,
-      }),
-    });
+app.use('/api/', generalLimit);
+app.use('/api/auth/login', authLimit);
+app.use('/api/auth/register', authLimit);
+app.use('/api/auth/forgot-password', authLimit);
+app.use('/api/chat', chatLimit);
 
-    if (!response.ok) {
-      const err = await response.json();
-      console.error('Groq API error:', err);
-      return res.status(502).json({ error: 'Error al contactar el servicio de IA' });
-    }
+app.use('/api/auth',     authRoutes);
+app.use('/api/habits',   habitRoutes);
+app.use('/api/goals',    goalRoutes);
+app.use('/api/notes',    noteRoutes);
+app.use('/api/pomodoro', pomodoroRoutes);
+app.use('/api/users',    userRoutes);
+app.use('/api/chat',     chatRoutes);
 
-    const data = await response.json();
-    const reply = data?.choices?.[0]?.message?.content;
-
-    if (!reply) {
-      return res.status(502).json({ error: 'No se recibió respuesta del asistente' });
-    }
-
-    res.json({ reply });
-
-  } catch (error) {
-    console.error('Chat error:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Neuronix API funcionando', timestamp: new Date().toISOString() });
 });
 
-module.exports = router;
+app.use('*', (req, res) => {
+  res.status(404).json({ error: `Ruta ${req.originalUrl} no encontrada` });
+});
+
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(err.statusCode || 500).json({ error: err.message || 'Error interno' });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log('\n╔══════════════════════════════════════╗');
+  console.log(`║  🧠 Neuronix API corriendo            ║`);
+  console.log(`║  📡 Puerto: ${PORT}                       ║`);
+  console.log(`║  🌍 Entorno: ${process.env.NODE_ENV || 'development'}           ║`);
+  console.log('╚══════════════════════════════════════╝\n');
+});
+
+module.exports = app;
