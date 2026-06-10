@@ -1,93 +1,44 @@
-// routes/chat.js — Neuronix Chatbot (Gemini 2.0 Flash)
+﻿// routes/chat.js — Neuronix Chatbot (Groq)
 const express = require('express');
 const router  = express.Router();
 const { proteger } = require('../middleware/auth');
 
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-const SYSTEM_PROMPT = `Eres NeuroBot, el asistente de estudio inteligente de Neuronix.
-Tu misión es ayudar a estudiantes a mejorar sus hábitos de estudio, productividad y bienestar académico.
+const SYSTEM_PROMPT = `Eres NeuroBot, el asistente de estudio inteligente de Neuronix. Tu mision es ayudar a estudiantes a mejorar sus habitos de estudio, productividad y bienestar academico. Puedes ayudar con tecnicas de estudio (Pomodoro, Feynman, mapas mentales), habitos, motivacion, gestion del tiempo y bienestar. Responde siempre en espanol, se amigable y da consejos practicos. Maximo 3-4 parrafos. No respondas temas fuera del ambito educativo.`;
 
-Puedes ayudar con:
-- Técnicas de estudio (Pomodoro, Feynman, mapas mentales, etc.)
-- Consejos para construir y mantener hábitos de estudio
-- Motivación y manejo del estrés académico
-- Gestión del tiempo y organización
-- Estrategias para recordar y retener información
-- Consejos de bienestar (sueño, ejercicio, alimentación para estudiar mejor)
-
-Reglas:
-- Responde siempre en español
-- Sé amigable, motivador y concreto
-- Da consejos prácticos y accionables, no solo teoría
-- Respuestas cortas y claras (máximo 3-4 párrafos)
-- Si el usuario comparte su contexto (hábitos, metas, rachas), úsalo para personalizar tu respuesta
-- No respondas temas fuera del ámbito educativo/hábitos/productividad`;
-
-// POST /api/chat
 router.post('/', proteger, async (req, res) => {
   try {
     const { message, history = [] } = req.body;
+    if (!message || message.trim().length === 0)
+      return res.status(400).json({ error: 'El mensaje no puede estar vacio' });
+    if (message.length > 500)
+      return res.status(400).json({ error: 'Mensaje demasiado largo (max. 500 caracteres)' });
 
-    if (!message || message.trim().length === 0) {
-      return res.status(400).json({ error: 'El mensaje no puede estar vacío' });
-    }
-
-    if (message.length > 500) {
-      return res.status(400).json({ error: 'Mensaje demasiado largo (máx. 500 caracteres)' });
-    }
-
-    // Construir historial en formato Gemini
-    // Limitar a los últimos 10 mensajes para no gastar tokens
     const recentHistory = history.slice(-10);
-    const contents = [
-      // Inyectar el system prompt como primer turno de usuario/modelo
-      { role: 'user',  parts: [{ text: SYSTEM_PROMPT }] },
-      { role: 'model', parts: [{ text: '¡Entendido! Soy NeuroBot y estoy listo para ayudarte con tus hábitos de estudio. ¿En qué puedo ayudarte hoy?' }] },
-      // Historial previo
-      ...recentHistory.map(m => ({
-        role: m.role === 'bot' ? 'model' : 'user',
-        parts: [{ text: m.text }],
-      })),
-      // Mensaje actual
-      { role: 'user', parts: [{ text: message.trim() }] },
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...recentHistory.map(m => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: m.text })),
+      { role: 'user', content: message.trim() },
     ];
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`, {
+    const response = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 512,
-          topP: 0.9,
-        },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-        ],
-      }),
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.7, max_tokens: 512 }),
     });
 
     if (!response.ok) {
       const err = await response.json();
-      console.error('Gemini API error:', err);
+      console.error('Groq API error:', err);
       return res.status(502).json({ error: 'Error al contactar el servicio de IA' });
     }
 
     const data = await response.json();
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!reply) {
-      return res.status(502).json({ error: 'No se recibió respuesta del asistente' });
-    }
+    const reply = data?.choices?.[0]?.message?.content;
+    if (!reply) return res.status(502).json({ error: 'No se recibio respuesta del asistente' });
 
     res.json({ reply });
-
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
